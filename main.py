@@ -56,12 +56,12 @@ except:
     exit(1)
 
 # Try to parse certificate file
-try:
-    trustedRoot = x509.load_der_x509_certificate(trustedRootCertData,backend=None)
-except Exception as e:
-    print(e)
-    print("Erro ao processar o certificado root")
-    exit(1)
+# try:
+trustedRoot = x509.load_der_x509_certificate(trustedRootCertData,backend=None)
+# except Exception as e:
+#     print(e)
+#     print("Erro ao processar o certificado root")
+#     exit(1)
 
 #### Ler data de validade dos certificados ####
 
