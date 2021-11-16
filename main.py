@@ -27,6 +27,9 @@ certificateToCheckAIA_CAIssuer=""
 certificateToCheckAIA_OCSP=""
 certificateToCheckCRL_List=[]
 
+PARSED_CRLS=[]
+
+TIMESTAMP_NOW=datetime.now().timestamp()
 
 ########### FUNCOES ###########
 
@@ -83,26 +86,97 @@ def loadCertificateFile(certificateFileName:str):
         exit(1)
     return certificateData     
 
-
-def requestCA(CAIssuerURI:str):
+def requestRemoteFile(remoteFileURI:str):
     
     try:
-        httpResponse = requests.get(CAIssuerURI)
+        httpResponse = requests.get(remoteFileURI)
     except Exception as e:
-        print("Erro ao acessar o certificado",CAIssuerURI)
+        print("Erro ao obter o arquivo:",remoteFileURI)
         print(e)
         exit(1)
     
     if httpResponse.status_code is not 200:
-        print("Erro ao obter certificado, CA="+CAIssuerURI+", status_code=%i",httpResponse.status_code)
+        print("Erro ao obter o arquivo, URI="+remoteFileURI+", status_code=%i",httpResponse.status_code)
         exit(1)
 
-    certCA=httpResponse.content
+    remoteFile=httpResponse.content
 
     httpResponse.close()
 
-    return certCA
+    return remoteFile
 
+############# PARSE REVOCATION LIST #################
+def parseCertificateRevocationList(CRLData:bytes):
+    parsedCertificateRevocationList:x509.CertificateRevocationList
+    try:
+        CRLData.decode()
+        print("O formato da CRL parece ser PEM")
+        fileFormat="PEM"
+    except:
+        print("O formato da CRL parece ser DER")
+        fileFormat="DER"
+
+    if fileFormat=="PEM":
+        try:
+            parsedCertificateRevocationList = x509.load_pem_x509_crl(CRLData,backend=None)
+        except Exception as e:
+            print(e)
+            print("Erro ao processar a lista de certificados revogados no formato PEM")
+            
+            try:
+                parsedCertificateRevocationList = x509.load_der_x509_crl(CRLData,backend=None)
+            except Exception as e:
+                print(e)
+                print("Erro ao processar a lista de certificados revogados no formato DER")
+                exit(1)
+
+    if fileFormat=="DER":
+        try:
+            parsedCertificateRevocationList = x509.load_der_x509_crl(CRLData,backend=None)
+        except Exception as e:
+            print(e)
+            print("Erro ao processar o certificado no formato DER")
+
+            try:
+                parsedCertificateRevocationList = x509.load_pem_x509_crl(CRLData,backend=None)
+            except Exception as e:
+                print(e)
+                print("Erro ao processar o certificado no formato PEM")
+                exit(1)
+    
+    return parsedCertificateRevocationList
+
+############## Request CRL LIST ###################
+def requestListOfCRL(listOfCRL:list):
+    for url in listOfCRL:
+        CRLData = requestRemoteFile(url)
+        PARSED_CRLS.append(parseCertificateRevocationList(CRLData)) 
+
+############## Validate Serial Number in CRL List ############
+def validateSerialNumberInListOfCRL(certificateSerialNumber:x509.Certificate.serial_number,CRLList:list):
+    print(len(CRLList))
+    print("\nChecking Revocation List: ")
+    for crl in CRLList:
+        revokedCertificate = crl.get_revoked_certificate_by_serial_number(certificateSerialNumber) 
+        if revokedCertificate is None:
+            print("\tO certificado nao esta na CRL, Certificado Valido")
+        else:
+            print("\tCertificado Revogado!!!")
+            print("\tSerial Number:", revokedCertificate.serial_number)
+            print("\tData de revogacao:", revokedCertificate.revocation_date)
+            print("Certificado Invalido!!!")
+            return False
+    
+    return True
+
+########### CHECK DATA OF CERTIFICATE ###########
+def checkDataCertificate(certificateName:str,certificate:Certificate):
+    if TIMESTAMP_NOW > certificate.not_valid_after.timestamp() or TIMESTAMP_NOW < certificate.not_valid_before.timestamp():
+        print("***A validade do certificado \""+certificateName+"\" é invalida!***")
+        return False
+    else:
+        print("\tValidade do certificado OK")
+        return True
 
 ########### READ CERTIFICATE ###########
 
@@ -120,11 +194,7 @@ print("\tNot valid After: ",trustedRoot.not_valid_after)
 print("\tSerial Number: ",trustedRoot.serial_number)
 
 ##### Check data valid:
-if datetime.now().timestamp() > trustedRoot.not_valid_after.timestamp() or datetime.now().timestamp() < trustedRoot.not_valid_before.timestamp():
-    print("***A validade do certificado \""+trustedRootFileName+"\" é invalida!***")
-    exit(1)
-else:
-    print("\tValidade do certificado OK")
+checkDataCertificate(trustedRootFileName,trustedRoot)
 
 ##############################################
 
@@ -160,14 +230,10 @@ print("\tNot valid After: ",certificateToCheck.not_valid_after)
 print("\tSerial Number: ",certificateToCheck.serial_number)
 
 ##### Check data valid:
-if datetime.now().timestamp() > certificateToCheck.not_valid_after.timestamp() or datetime.now().timestamp() < certificateToCheck.not_valid_before.timestamp():
-    print("***A validade do certificado \""+certificateToCheckFileName+"\" é invalida!***")
-    exit(1)
-else:
-    print("\tValidade do certificado OK")
+checkDataCertificate(certificateToCheckFileName,certificateToCheck)
 ##############################################
 
-certCAData=requestCA(certificateToCheckAIA_CAIssuer)
+certCAData=requestRemoteFile(certificateToCheckAIA_CAIssuer)
 
 certCA=parseCertificate(certCAData)
 
@@ -175,4 +241,13 @@ certCAAuthorityKeyIdentifier=certCA.extensions.get_extension_for_oid(authorityKe
 print("\n\ncertificate To Check -> Authority Key Identifier:\n\tOID: [",authorityKeyIdentifier.dotted_string,"], Hex Value:",certificateToCheckAuthorityKeyIdentifier)
 
 if certCAAuthorityKeyIdentifier==trustedRootSubjectKeyIdentifier:
-    print("Certificado OK")
+    print("Emissor Root Confiavel, Certificado OK")
+else:
+    print("O emissor root desse certificado nao esta na lista de roots confiaveis")
+    exit(1)
+
+############ Validacao CRL #######################
+
+requestListOfCRL(certificateToCheckCRL_List)
+
+validateSerialNumberInListOfCRL(certificateToCheck.serial_number,PARSED_CRLS)
