@@ -106,7 +106,7 @@ def requestRemoteFile(remoteFileURI:str):
         print(e)
         exit(1)
     
-    if httpResponse.status_code is not 200:
+    if httpResponse.status_code != 200:
         print("Erro ao obter o arquivo, URI="+remoteFileURI+", status_code=%i",httpResponse.status_code)
         exit(1)
 
